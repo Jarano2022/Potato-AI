@@ -1,0 +1,10 @@
+{
+  "name": "Potato - Hermes Voice Chat",
+  "description": "Chat de voz interactivo con Hermes, tonos anaranjados y visualizador dinámico de audio mono estilo cava.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

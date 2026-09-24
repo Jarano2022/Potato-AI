@@ -1,0 +1,9 @@
+node_modules
+.git
+.github
+dist
+.env
+.env.local
+npm-debug.log*
+.DS_Store
+*.swp

@@ -1,0 +1,30 @@
+services:
+  potato-voice-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: potato_hermes_voice
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      # Optional: set default GEMINI_API_KEY for audio/fallback if desired
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    extra_hosts:
+      # Allows the container to communicate with Hermes Agent running on the host machine (http://host.docker.internal:8642)
+      - "host.docker.internal:host-gateway"
+
+  # Optional companion profile if you want to run Ollama or a local Hermes instance in Docker:
+  # hermes-ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: hermes_ollama
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+
+# volumes:
+#   ollama_data:
