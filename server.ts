@@ -60,10 +60,20 @@ function isPrivateNetworkAddress(urlStr: string): boolean {
   }
 }
 
+// Route: Get Hermes server environment info (whether key is configured in .env, without exposing it)
+app.get('/api/hermes/status', (_req: Request, res: Response) => {
+  const hasEnvKey = Boolean(process.env.HERMES_API_KEY || process.env.HERMES_TOKEN);
+  const defaultEndpoint = process.env.HERMES_ENDPOINT || 'http://100.94.150.43:8642/v1/chat/completions';
+  res.json({
+    hasEnvKey,
+    defaultEndpoint,
+  });
+});
+
 // Route: Test Hermes connection (e.g. Hermes Agent daemon, OpenRouter, Ollama, custom URL)
 app.post('/api/hermes/test', async (req: Request, res: Response) => {
   const { endpoint, apiKey, model } = req.body;
-  let targetUrl = (endpoint || 'http://100.94.150.43:8642/v1/chat/completions').trim();
+  let targetUrl = (endpoint || process.env.HERMES_ENDPOINT || 'http://100.94.150.43:8642/v1/chat/completions').trim();
   if (targetUrl.startsWith('://')) targetUrl = 'http' + targetUrl;
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
     targetUrl = 'http://' + targetUrl;
@@ -76,8 +86,9 @@ app.post('/api/hermes/test', async (req: Request, res: Response) => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+    const effectiveApiKey = (apiKey || process.env.HERMES_API_KEY || process.env.HERMES_TOKEN || '').trim();
+    if (effectiveApiKey) {
+      headers['Authorization'] = `Bearer ${effectiveApiKey}`;
     }
 
     const payload: any = {
@@ -179,8 +190,9 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+      const effectiveApiKey = (apiKey || process.env.HERMES_API_KEY || process.env.HERMES_TOKEN || '').trim();
+      if (effectiveApiKey) {
+        headers['Authorization'] = `Bearer ${effectiveApiKey}`;
       }
 
       // Exact curl payload structure

@@ -9,9 +9,9 @@ import { audioEngine } from './utils/audioEngine.ts';
 import { speechEngine } from './utils/speechEngine.ts';
 import { callHermesDirectly } from './utils/hermesClient.ts';
 
-const LOCAL_STORAGE_KEY = 'potato_hermes_config_v6';
+const LOCAL_STORAGE_KEY = 'potato_hermes_config_v7';
 const DEFAULT_HERMES_ENDPOINT = 'http://100.94.150.43:8642/v1/chat/completions';
-const DEFAULT_HERMES_TOKEN = '2c0e16d8cb65e8a8e3733897a326009903ba77cefea321ee1354d224ec94';
+const DEFAULT_HERMES_TOKEN = '';
 
 export default function App() {
   const [config, setConfig] = useState<HermesConfig>(() => {
@@ -28,7 +28,7 @@ export default function App() {
           return {
             provider: parsed.provider || 'hermes_agent_tailscale',
             endpoint: loadedEndpoint,
-            apiKey: parsed.apiKey || DEFAULT_HERMES_TOKEN,
+            apiKey: parsed.apiKey || '',
             model: parsed.model || 'hermes-agent',
             systemPrompt:
               parsed.systemPrompt ||
@@ -49,7 +49,7 @@ export default function App() {
     return {
       provider: 'hermes_agent_tailscale',
       endpoint: DEFAULT_HERMES_ENDPOINT,
-      apiKey: DEFAULT_HERMES_TOKEN,
+      apiKey: '',
       model: 'hermes-agent',
       systemPrompt:
         'Eres "Potato", un asistente de voz conciso y natural conectado con Hermes Agent. Responde siempre en español conversacional breve.',

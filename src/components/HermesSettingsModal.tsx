@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Check, Key, RefreshCw, AlertCircle, ShieldCheck, ExternalLink, Bot, Cpu, Terminal, Laptop } from 'lucide-react';
 import { testHermesDirectConnection, isPrivateNetworkAddress } from '../utils/hermesClient.ts';
 
@@ -34,6 +34,16 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
   const [draft, setDraft] = useState<HermesConfig>({ ...config });
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; isPrivateIssue?: boolean } | null>(null);
+  const [hasServerEnvKey, setHasServerEnvKey] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/hermes/status')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.hasEnvKey) setHasServerEnvKey(true);
+      })
+      .catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
@@ -48,15 +58,12 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
     if (provider === 'hermes_agent_lan') {
       endpoint = 'http://192.168.1.199:8642/v1/chat/completions';
       model = 'hermes-agent';
-      apiKey = '2c0e16d8cb65e8a8e3733897a326009903ba77cefea321ee1354d224ec94';
     } else if (provider === 'hermes_agent_tailscale') {
       endpoint = 'http://100.94.150.43:8642/v1/chat/completions';
       model = 'hermes-agent';
-      apiKey = '2c0e16d8cb65e8a8e3733897a326009903ba77cefea321ee1354d224ec94';
     } else if (provider === 'hermes_agent_local') {
       endpoint = 'http://127.0.0.1:8642/v1/chat/completions';
       model = 'hermes-agent';
-      apiKey = apiKey || '2c0e16d8cb65e8a8e3733897a326009903ba77cefea321ee1354d224ec94';
     } else if (provider === 'hermes_agent_nous_portal') {
       endpoint = 'https://api.nousresearch.com/v1/chat/completions';
       model = 'hermes-3-llama-3.1-405b';
@@ -208,15 +215,20 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
           {/* API Key */}
           <div>
             <div className="flex justify-between items-center mb-1">
-              <label className="text-[11px] font-mono text-stone-400">
-                API Key (opcional en local)
+              <label className="text-[11px] font-mono text-stone-400 flex items-center gap-1.5">
+                <span>API Key</span>
+                {hasServerEnvKey && (
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 font-sans">
+                    ✓ Activa en .env del servidor
+                  </span>
+                )}
               </label>
             </div>
             <input
               type="password"
               value={draft.apiKey}
               onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-              placeholder={draft.provider === 'hermes_agent_local' ? 'API_SERVER_KEY (si la activaste)' : 'sk-...'}
+              placeholder={hasServerEnvKey ? '(Protegida en .env - dejar vacío para usarla)' : 'Configúrala en .env (HERMES_API_KEY) o aquí'}
               className="w-full px-3 py-1.5 rounded-lg bg-[#141414] border border-white/10 text-stone-200 font-mono text-[11px] focus:outline-none focus:border-orange-500"
             />
           </div>
