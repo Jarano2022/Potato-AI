@@ -75,6 +75,8 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [showMicBanner, setShowMicBanner] = useState(false);
+  const [micBannerData, setMicBannerData] = useState<{ title: string; message: string } | null>(null);
+  const [agentStatusText, setAgentStatusText] = useState<string>('');
 
   const isHandsFreeRef = useRef(config.handsFree);
   isHandsFreeRef.current = config.handsFree;
@@ -98,12 +100,24 @@ export default function App() {
 
   const handleStartRecording = async () => {
     setShowMicBanner(false);
+    setAgentStatusText('');
     try {
       speechEngine.stopSpeaking();
       audioEngine.stopAudioPlayback();
       audioEngine.stopTestMode();
       setIsTestMode(false);
       setIsSpeaking(false);
+
+      // Check if browser supports Web Speech API
+      if (!speechEngine.isSpeechSupported()) {
+        setShowMicBanner(true);
+        setMicBannerData({
+          title: 'Navegador sin reconocimiento de voz Web Speech (ej. Firefox)',
+          message: 'Tu navegador actual no tiene activada la API nativa de voz. Abre http://localhost:3000 en Google Chrome, Brave o Edge para hablar con el micrófono, o escribe directamente en la caja de texto inferior.',
+        });
+        setAgentStatusText('Usa Chrome o escribe tu mensaje abajo');
+        return;
+      }
 
       // Attempt microphone capture
       let micReady = false;
@@ -113,6 +127,13 @@ export default function App() {
       } catch (micErr: any) {
         console.warn('Microphone stream could not be started in current context:', micErr?.message || micErr);
         setShowMicBanner(true);
+        setMicBannerData({
+          title: micErr?.name === 'NotAllowedError' ? 'Permiso de micrófono bloqueado' : 'Micrófono no detectado',
+          message: micErr?.name === 'NotAllowedError'
+            ? 'El navegador tiene bloqueado el micrófono. Haz clic en el icono del candado en la barra de direcciones de tu navegador y concede permiso al micrófono.'
+            : 'No se pudo acceder a ningún micrófono en tu sistema. Puedes escribir tus mensajes directamente en la caja inferior.',
+        });
+        setAgentStatusText('Permiso de micrófono necesario');
         setIsRecording(false);
         audioEngine.stopMicrophone();
         return;
@@ -122,9 +143,13 @@ export default function App() {
 
       setIsRecording(true);
       setInterimTranscript('');
+      setAgentStatusText('Escuchando...');
 
       speechEngine.startListening({
-        onStart: () => setIsRecording(true),
+        onStart: () => {
+          setIsRecording(true);
+          setAgentStatusText('Escuchando tu voz...');
+        },
         onResult: (transcript: string, isFinal: boolean) => {
           setInterimTranscript(transcript);
           if (isFinal && transcript.trim().length > 0) {
@@ -135,8 +160,29 @@ export default function App() {
           console.warn('Speech recognition warning:', err);
           setIsRecording(false);
           audioEngine.stopMicrophone();
-          if (err === 'not-allowed' || err.includes('not-allowed')) {
+          if (err === 'not-allowed') {
             setShowMicBanner(true);
+            setMicBannerData({
+              title: 'Permiso de micrófono bloqueado',
+              message: 'El navegador denegó el acceso al micrófono. Haz clic en el candado junto a la URL y permite el micrófono.',
+            });
+            setAgentStatusText('Micrófono bloqueado');
+          } else if (err === 'no-speech') {
+            setAgentStatusText('No se detectó voz. Vuelve a pulsar para hablar.');
+          } else if (err === 'network') {
+            setShowMicBanner(true);
+            setMicBannerData({
+              title: 'Error de red en el reconocimiento de voz',
+              message: 'El servicio de voz del navegador no pudo contactar con los servidores de transcripción. Puedes escribir tus mensajes por texto abajo.',
+            });
+            setAgentStatusText('Error de red en voz');
+          } else {
+            setShowMicBanner(true);
+            setMicBannerData({
+              title: 'Aviso del motor de voz',
+              message: `${err}. Puedes interactuar directamente escribiendo en la caja de texto inferior.`,
+            });
+            setAgentStatusText('Escribe tu mensaje abajo');
           }
         },
         onEnd: () => {
@@ -147,6 +193,10 @@ export default function App() {
     } catch (err: any) {
       console.warn('Mic access warning:', err?.message || err);
       setShowMicBanner(true);
+      setMicBannerData({
+        title: 'Error al iniciar captura de audio',
+        message: err?.message || 'No se pudo iniciar el micrófono en tu dispositivo.',
+      });
       setIsRecording(false);
       audioEngine.stopMicrophone();
     }
@@ -288,7 +338,12 @@ export default function App() {
         {showMicBanner && (
           <section className="w-full">
             <MicPermissionBanner
-              onDismiss={() => setShowMicBanner(false)}
+              onDismiss={() => {
+                setShowMicBanner(false);
+                setMicBannerData(null);
+              }}
+              customTitle={micBannerData?.title}
+              customMessage={micBannerData?.message}
               onOpenInNewTab={() => window.open(window.location.href, '_blank')}
               onActivateSimulation={() => {
                 setShowMicBanner(false);
@@ -311,6 +366,7 @@ export default function App() {
             isRecording={isRecording}
             isSpeaking={isSpeaking}
             isThinking={isThinking}
+            agentStatusText={agentStatusText}
             handsFree={config.handsFree}
             interimTranscript={interimTranscript}
             onStartRecording={handleStartRecording}

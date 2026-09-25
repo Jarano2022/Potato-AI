@@ -102,8 +102,8 @@ case "$OPTION" in
 
     echo -e "\n${C_CYAN}Verificando dependencias en node_modules...${C_RESET}"
     if [ ! -d "node_modules" ]; then
-      echo -e "${C_YELLOW}Instalando paquetes por primera vez...${C_RESET}"
-      npm install
+      echo -e "${C_YELLOW}Instalando paquetes por primera vez (--legacy-peer-deps)...${C_RESET}"
+      npm install --legacy-peer-deps
     fi
 
     echo -e "\n${C_GREEN}Iniciando servidor de desarrollo...${C_RESET}"
@@ -141,7 +141,7 @@ case "$OPTION" in
 
     echo -e "\n${C_CYAN}Instalando dependencias si faltan...${C_RESET}"
     if [ ! -d "node_modules" ]; then
-      npm install
+      npm install --legacy-peer-deps
     fi
 
     echo -e "\n${C_CYAN}Compilando cliente Vite y servidor de producción...${C_RESET}"
@@ -153,8 +153,8 @@ case "$OPTION" in
     ;;
 
   4)
-    echo -e "\n${C_CYAN}Ejecutando npm install...${C_RESET}"
-    npm install
+    echo -e "\n${C_CYAN}Ejecutando npm install (--legacy-peer-deps)...${C_RESET}"
+    npm install --legacy-peer-deps
     echo -e "${C_GREEN}✅ Dependencias instaladas correctamente.${C_RESET}"
     ;;
 

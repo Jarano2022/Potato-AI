@@ -6,6 +6,8 @@ interface MicPermissionBannerProps {
   onOpenInNewTab?: () => void;
   onActivateSimulation?: () => void;
   onFocusTextInput?: () => void;
+  customTitle?: string;
+  customMessage?: string;
 }
 
 export const MicPermissionBanner: React.FC<MicPermissionBannerProps> = ({
@@ -13,8 +15,17 @@ export const MicPermissionBanner: React.FC<MicPermissionBannerProps> = ({
   onOpenInNewTab,
   onActivateSimulation,
   onFocusTextInput,
+  customTitle,
+  customMessage,
 }) => {
   const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+  const title = customTitle || (isInIframe ? 'Micrófono no permitido en este visor' : 'Atención con el micrófono / navegador');
+  const message =
+    customMessage ||
+    (isInIframe
+      ? 'El navegador o el marco integrado (iframe) bloquea la captura directa de audio del sistema. Puedes abrir la aplicación en una pestaña independiente para conceder el permiso sin restricciones.'
+      : 'El permiso del micrófono no se pudo activar. Asegúrate de dar permiso en el icono de candado de la barra de direcciones o de usar Google Chrome / Brave para soporte completo de voz.');
 
   return (
     <div className="w-full max-w-xl mx-auto p-4 rounded-2xl bg-[#141210] border border-orange-500/30 shadow-2xl shadow-orange-950/20 text-stone-200 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -26,7 +37,7 @@ export const MicPermissionBanner: React.FC<MicPermissionBannerProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-medium text-orange-200">
-              Micrófono no permitido en este visor
+              {title}
             </h3>
             <button
               type="button"
@@ -39,9 +50,7 @@ export const MicPermissionBanner: React.FC<MicPermissionBannerProps> = ({
           </div>
 
           <p className="mt-1 text-xs text-stone-400 leading-relaxed font-sans">
-            {isInIframe
-              ? 'El navegador o el marco integrado (iframe) bloquea la captura directa de audio del sistema. Puedes abrir la aplicación en una pestaña independiente para conceder el permiso sin restricciones.'
-              : 'El permiso del micrófono fue denegado o no está disponible en este contexto. Puedes habilitarlo en el icono de candado/ajustes de tu navegador o escribir por texto.'}
+            {message}
           </p>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">

@@ -397,7 +397,9 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🥔 Potato Voice Chat server running on http://0.0.0.0:${PORT}`);
+    console.log(`🥔 Potato Voice Chat server online:`);
+    console.log(`   👉 Abre en tu navegador: http://localhost:${PORT}`);
+    console.log(`   📡 Red local:            http://0.0.0.0:${PORT}`);
   });
 }
 
