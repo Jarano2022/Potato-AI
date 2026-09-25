@@ -15,6 +15,8 @@ export class AudioEngine {
   private isTestMode: boolean = false;
   private testInterval: any = null;
   private syntheticFrequencies: Uint8Array = new Uint8Array(64);
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
 
   constructor() {
     // Lazy initialize to comply with browser autoplay policies
@@ -108,6 +110,13 @@ export class AudioEngine {
    * Stop capturing microphone
    */
   public stopMicrophone(): void {
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try {
+        this.mediaRecorder.stop();
+      } catch (e) {
+        // ignore
+      }
+    }
     if (this.micStream) {
       this.micStream.getTracks().forEach((t) => t.stop());
       this.micStream = null;
@@ -120,6 +129,82 @@ export class AudioEngine {
       }
       this.micSource = null;
     }
+  }
+
+  /**
+   * Start recording audio chunks for transcription fallback
+   */
+  public startAudioRecording(stream?: MediaStream): boolean {
+    const targetStream = stream || this.micStream;
+    if (!targetStream) return false;
+
+    this.recordedChunks = [];
+    let mimeType = 'audio/webm';
+    if (typeof MediaRecorder !== 'undefined') {
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        mimeType = 'audio/ogg;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      }
+    }
+
+    try {
+      this.mediaRecorder = mimeType
+        ? new MediaRecorder(targetStream, { mimeType })
+        : new MediaRecorder(targetStream);
+
+      this.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          this.recordedChunks.push(e.data);
+        }
+      };
+
+      this.mediaRecorder.start(100);
+      return true;
+    } catch (err) {
+      console.warn('MediaRecorder start error:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Stop recording audio and return audio blob with base64 encoding
+   */
+  public async stopAudioRecording(): Promise<{ blob: Blob; mimeType: string; base64: string } | null> {
+    if (!this.mediaRecorder) return null;
+
+    return new Promise((resolve) => {
+      const rec = this.mediaRecorder!;
+      rec.onstop = () => {
+        const mime = rec.mimeType || 'audio/webm';
+        const blob = new Blob(this.recordedChunks, { type: mime });
+        this.recordedChunks = [];
+        this.mediaRecorder = null;
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = (reader.result as string) || '';
+          const base64 = res.split(',')[1] || '';
+          resolve({ blob, mimeType: mime, base64 });
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      };
+
+      try {
+        if (rec.state !== 'inactive') {
+          rec.stop();
+        } else {
+          resolve(null);
+        }
+      } catch (e) {
+        resolve(null);
+      }
+    });
   }
 
   /**

@@ -378,6 +378,44 @@ app.post('/api/tts', async (req: Request, res: Response) => {
   }
 });
 
+// Route: Transcribe audio recording (native fallback for Chromium/Firefox on Linux)
+app.post('/api/transcribe', async (req: Request, res: Response) => {
+  try {
+    const { audioData, mimeType = 'audio/webm' } = req.body;
+    if (!audioData) {
+      return res.status(400).json({ error: 'No audio data provided' });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      return res.status(503).json({ error: 'No hay API Key configurada para transcripción de audio en el servidor.' });
+    }
+
+    const cleanBase64 = audioData.replace(/^data:[^;]+;base64,/, '');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: mimeType.split(';')[0],
+            data: cleanBase64,
+          },
+        },
+        {
+          text: 'Transcribe el audio de este mensaje de voz con total fidelidad en español. Devuelve EXCLUSIVAMENTE el texto transcrito de lo que dice el usuario, sin comillas, sin introducciones ni comentarios.',
+        },
+      ],
+    });
+
+    const transcription = response.text ? response.text.trim() : '';
+    return res.json({ text: transcription });
+  } catch (error: any) {
+    console.error('Transcription error:', error);
+    return res.status(500).json({ error: error.message || 'Error al transcribir audio' });
+  }
+});
+
 // Setup Vite or Static serve
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {

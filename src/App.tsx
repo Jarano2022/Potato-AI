@@ -108,22 +108,10 @@ export default function App() {
       setIsTestMode(false);
       setIsSpeaking(false);
 
-      // Check if browser supports Web Speech API
-      if (!speechEngine.isSpeechSupported()) {
-        setShowMicBanner(true);
-        setMicBannerData({
-          title: 'Navegador sin reconocimiento de voz Web Speech (ej. Firefox)',
-          message: 'Tu navegador actual no tiene activada la API nativa de voz. Abre http://localhost:3000 en Google Chrome, Brave o Edge para hablar con el micrófono, o escribe directamente en la caja de texto inferior.',
-        });
-        setAgentStatusText('Usa Chrome o escribe tu mensaje abajo');
-        return;
-      }
-
       // Attempt microphone capture
-      let micReady = false;
+      let micStream: MediaStream;
       try {
-        await audioEngine.startMicrophone();
-        micReady = true;
+        micStream = await audioEngine.startMicrophone();
       } catch (micErr: any) {
         console.warn('Microphone stream could not be started in current context:', micErr?.message || micErr);
         setShowMicBanner(true);
@@ -139,57 +127,47 @@ export default function App() {
         return;
       }
 
-      if (!micReady) return;
-
       setIsRecording(true);
       setInterimTranscript('');
-      setAgentStatusText('Escuchando...');
+      setAgentStatusText('Escuchando tu voz... (Clic para terminar y enviar)');
 
-      speechEngine.startListening({
-        onStart: () => {
-          setIsRecording(true);
-          setAgentStatusText('Escuchando tu voz...');
-        },
-        onResult: (transcript: string, isFinal: boolean) => {
-          setInterimTranscript(transcript);
-          if (isFinal && transcript.trim().length > 0) {
-            handleStopRecordingWithText(transcript);
-          }
-        },
-        onError: (err: string) => {
-          console.warn('Speech recognition warning:', err);
-          setIsRecording(false);
-          audioEngine.stopMicrophone();
-          if (err === 'not-allowed') {
-            setShowMicBanner(true);
-            setMicBannerData({
-              title: 'Permiso de micrófono bloqueado',
-              message: 'El navegador denegó el acceso al micrófono. Haz clic en el candado junto a la URL y permite el micrófono.',
-            });
-            setAgentStatusText('Micrófono bloqueado');
-          } else if (err === 'no-speech') {
-            setAgentStatusText('No se detectó voz. Vuelve a pulsar para hablar.');
-          } else if (err === 'network') {
-            setShowMicBanner(true);
-            setMicBannerData({
-              title: 'Error de red en el reconocimiento de voz',
-              message: 'El servicio de voz del navegador no pudo contactar con los servidores de transcripción. Puedes escribir tus mensajes por texto abajo.',
-            });
-            setAgentStatusText('Error de red en voz');
-          } else {
-            setShowMicBanner(true);
-            setMicBannerData({
-              title: 'Aviso del motor de voz',
-              message: `${err}. Puedes interactuar directamente escribiendo en la caja de texto inferior.`,
-            });
-            setAgentStatusText('Escribe tu mensaje abajo');
-          }
-        },
-        onEnd: () => {
-          setIsRecording(false);
-          audioEngine.stopMicrophone();
-        },
-      });
+      // Start direct audio recording stream for Chromium/Linux fallback
+      audioEngine.startAudioRecording(micStream);
+
+      // If browser has speech recognition, attempt it in parallel
+      if (speechEngine.isSpeechSupported()) {
+        speechEngine.startListening({
+          onStart: () => {
+            setIsRecording(true);
+          },
+          onResult: (transcript: string, isFinal: boolean) => {
+            setInterimTranscript(transcript);
+            if (isFinal && transcript.trim().length > 0) {
+              handleStopRecordingWithText(transcript);
+            }
+          },
+          onError: (err: string) => {
+            console.warn('Speech recognition warning:', err);
+            if (err === 'network') {
+              // Known Chromium Linux behavior (lacks Google proprietary keys)
+              // We do NOT abort: direct audio recording continues seamlessly!
+              setAgentStatusText('Grabando audio (Modo directo Chromium)... Clic al terminar');
+            } else if (err === 'not-allowed') {
+              setIsRecording(false);
+              audioEngine.stopMicrophone();
+              setShowMicBanner(true);
+              setMicBannerData({
+                title: 'Permiso de micrófono bloqueado',
+                message: 'El navegador denegó el acceso al micrófono. Haz clic en el candado junto a la URL y permite el micrófono.',
+              });
+              setAgentStatusText('Micrófono bloqueado');
+            }
+          },
+          onEnd: () => {
+            // Keep recording if direct audio recording is active
+          },
+        });
+      }
     } catch (err: any) {
       console.warn('Mic access warning:', err?.message || err);
       setShowMicBanner(true);
@@ -202,14 +180,51 @@ export default function App() {
     }
   };
 
-  const handleStopRecording = () => {
+  const handleStopRecording = async () => {
     speechEngine.stopListening();
-    audioEngine.stopMicrophone();
     setIsRecording(false);
 
+    // If interim transcript was already received via Web Speech API:
     if (interimTranscript.trim().length > 0) {
-      handleStopRecordingWithText(interimTranscript);
+      const text = interimTranscript;
+      audioEngine.stopMicrophone();
+      handleStopRecordingWithText(text);
+      return;
     }
+
+    // Otherwise, retrieve the recorded audio and transcribe via backend (essential for Chromium on Linux)
+    setAgentStatusText('Procesando tu voz...');
+    setIsThinking(true);
+
+    try {
+      const audioResult = await audioEngine.stopAudioRecording();
+      audioEngine.stopMicrophone();
+
+      if (audioResult && audioResult.base64 && audioResult.base64.length > 500) {
+        setAgentStatusText('Transcribiendo audio...');
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioData: audioResult.base64,
+            mimeType: audioResult.mimeType,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.text && data.text.trim()) {
+            handleStopRecordingWithText(data.text.trim());
+            return;
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('Direct audio transcription warning:', e);
+    }
+
+    setIsThinking(false);
+    setAgentStatusText('No se detectó audio. Pulsa para hablar de nuevo.');
   };
 
   const handleStopRecordingWithText = async (textToSend: string) => {
