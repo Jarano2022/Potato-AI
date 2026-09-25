@@ -5,6 +5,7 @@ interface VoiceControllerProps {
   isRecording: boolean;
   isSpeaking: boolean;
   isThinking: boolean;
+  agentStatusText?: string;
   handsFree: boolean;
   interimTranscript: string;
   onStartRecording: () => void;
@@ -20,6 +21,7 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
   isRecording,
   isSpeaking,
   isThinking,
+  agentStatusText,
   handsFree,
   interimTranscript,
   onStartRecording,
@@ -94,7 +96,7 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
             : isRecording
             ? 'Escuchando tu voz...'
             : isThinking
-            ? 'Pensando...'
+            ? agentStatusText || 'Hermes pensando...'
             : 'Haz clic para hablar'}
         </p>
       </div>
@@ -139,6 +141,7 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
       {/* Minimal clean text input */}
       <form onSubmit={handleTextSubmit} className="w-full max-w-md flex items-center gap-2">
         <input
+          id="voice-chat-text-input"
           type="text"
           value={typedText}
           onChange={(e) => setTypedText(e.target.value)}

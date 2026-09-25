@@ -12,6 +12,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
+app.use((req: Request, res: Response, next) => {
+  res.setHeader('Permissions-Policy', 'microphone=(self "*"), autoplay=(self "*")');
+  next();
+});
+
 app.use(express.json({ limit: '15mb' }));
 
 // Initialize GoogleGenAI client (used for fallback or built-in voice intelligence / TTS)
@@ -40,29 +45,47 @@ app.get('/api/status', (req: Request, res: Response) => {
   });
 });
 
-// Route: Test Hermes connection (e.g. OpenRouter, Ollama, custom URL)
-app.post('/api/hermes/test', async (req: Request, res: Response) => {
+// Helper to detect private IP / local addresses
+function isPrivateNetworkAddress(urlStr: string): boolean {
   try {
-    const { endpoint, apiKey, model } = req.body;
-    const targetUrl = endpoint || 'https://openrouter.ai/api/v1/chat/completions';
-    
-    // Quick test prompt
+    const url = new URL(urlStr);
+    const host = url.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local')) return true;
+    if (host.startsWith('192.168.') || host.startsWith('10.')) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return true;
+    if (/^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./.test(host)) return true; // Tailscale CGNAT 100.64.0.0/10
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Route: Test Hermes connection (e.g. Hermes Agent daemon, OpenRouter, Ollama, custom URL)
+app.post('/api/hermes/test', async (req: Request, res: Response) => {
+  const { endpoint, apiKey, model } = req.body;
+  const targetUrl = endpoint || 'http://192.168.1.199:8642/v1/chat/completions';
+  const isHermesAgent = model === 'hermes-agent' || targetUrl.includes(':8642');
+  const isPrivate = isPrivateNetworkAddress(targetUrl);
+  
+  try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
     if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Authorization'] = `Bearer ${apiKey.trim()}`;
     }
 
-    const payload = {
-      model: model || 'nousresearch/hermes-3-llama-3.1-8b',
-      messages: [{ role: 'user', content: 'Say "Potato online" in 2 words.' }],
-      max_tokens: 15,
-      temperature: 0.7,
+    const payload: any = {
+      model: model || 'hermes-agent',
+      messages: [{ role: 'user', content: 'Di "Hermes conectado" en dos palabras.' }],
     };
+    if (!isHermesAgent) {
+      payload.max_tokens = 15;
+      payload.temperature = 0.7;
+    }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 4500);
 
     const apiRes = await fetch(targetUrl, {
       method: 'POST',
@@ -74,19 +97,33 @@ app.post('/api/hermes/test', async (req: Request, res: Response) => {
 
     if (!apiRes.ok) {
       const errText = await apiRes.text();
+      let parsedErr = errText;
+      try {
+        const json = JSON.parse(errText);
+        parsedErr = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || errText;
+      } catch {}
       return res.status(apiRes.status).json({
         ok: false,
-        error: `Error HTTP ${apiRes.status}: ${errText.slice(0, 200)}`,
+        error: `Error HTTP ${apiRes.status}: ${parsedErr.slice(0, 250)}`,
       });
     }
 
     const data = await apiRes.json();
-    const reply = data.choices?.[0]?.message?.content || 'Conexión exitosa';
-    return res.json({ ok: true, reply });
+    const reply = data.choices?.[0]?.message?.content || data.hermes?.error || 'Conexión exitosa';
+    return res.json({ ok: true, reply, hermes: data.hermes });
   } catch (error: any) {
+    const isAbort = error.name === 'AbortError' || error.message?.includes('aborted');
+    let friendlyError = error.message || 'Error conectando con Hermes';
+    if (isAbort && isPrivate) {
+      friendlyError = `Tiempo agotado con ${targetUrl}. La app está corriendo en la nube (AI Studio) y los servidores de Google no tienen acceso a redes privadas o Tailscale (${targetUrl}). Ejecuta la app localmente con 'npm run dev' en tu PC o crea un túnel HTTPS (Cloudflare Tunnel o Tailscale Funnel).`;
+    } else if (isAbort) {
+      friendlyError = `Tiempo de espera agotado (timeout) al conectar con ${targetUrl}.`;
+    }
+
     return res.status(500).json({
       ok: false,
-      error: error.message || 'Error conectando con Hermes',
+      error: friendlyError,
+      isPrivateNetworkIssue: isPrivate,
     });
   }
 });
@@ -96,9 +133,9 @@ app.post('/api/chat', async (req: Request, res: Response) => {
   try {
     const {
       messages = [],
-      provider = 'hermes_openrouter', // 'hermes_openrouter' | 'hermes_ollama' | 'hermes_custom' | 'potato_gemini'
-      model = 'nousresearch/hermes-3-llama-3.1-8b',
-      endpoint = 'https://openrouter.ai/api/v1/chat/completions',
+      provider = 'hermes_agent_lan', // 'hermes_agent_lan' | 'hermes_agent_local' | 'hermes_openrouter' | 'hermes_ollama' | 'hermes_custom' | 'potato_gemini'
+      model = 'hermes-agent',
+      endpoint = 'http://192.168.1.199:8642/v1/chat/completions',
       apiKey = '',
       systemPrompt = '',
       temperature = 0.7,
@@ -109,21 +146,40 @@ app.post('/api/chat', async (req: Request, res: Response) => {
 
     // Check if user is routing through Hermes
     if (provider.startsWith('hermes_')) {
-      const targetUrl = endpoint || (provider === 'hermes_ollama' ? 'http://localhost:11434/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
+      const targetUrl = endpoint || (provider === 'hermes_ollama' ? 'http://localhost:11434/v1/chat/completions' : 'http://192.168.1.199:8642/v1/chat/completions');
+      const isHermesAgent = model === 'hermes-agent' || targetUrl.includes(':8642');
+      const isPrivate = isPrivateNetworkAddress(targetUrl);
       
-      const formattedMessages = [
-        { role: 'system', content: baseSystem },
-        ...messages.map((m: any) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
-      ];
+      // For Hermes Agent daemon, only pass conversation history (no prepended system instruction) to match exact curl specs
+      const formattedMessages = isHermesAgent
+        ? messages.map((m: any) => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content,
+          }))
+        : [
+            { role: 'system', content: baseSystem },
+            ...messages.map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.content,
+            })),
+          ];
 
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
       if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+        headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+      }
+
+      // Exact curl payload structure
+      const payload: any = {
+        model: model || 'hermes-agent',
+        messages: formattedMessages.length > 0 ? formattedMessages : [{ role: 'user', content: 'Hola' }],
+      };
+
+      if (!isHermesAgent) {
+        payload.temperature = temperature;
+        payload.max_tokens = 350;
       }
 
       // If calling OpenRouter without user key, and we have server key or fallback
@@ -132,14 +188,14 @@ app.post('/api/chat', async (req: Request, res: Response) => {
         const ai = getGenAI();
         if (ai) {
           // Fallback to Gemini 3.8 Flash formatted with Hermes Persona
-          const chatContents = formattedMessages.map(msg => ({
+          const chatContents = formattedMessages.map((msg: any) => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
           }));
 
           const geminiRes = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
-            contents: chatContents.map(c => `${c.role}: ${c.parts[0].text}`).join('\n\n'),
+            contents: chatContents.map((c: any) => `${c.role}: ${c.parts[0].text}`).join('\n\n'),
             config: {
               systemInstruction: `${baseSystem} (Simulando la personalidad audaz y directa de Hermes 3)`,
               temperature,
@@ -154,24 +210,55 @@ app.post('/api/chat', async (req: Request, res: Response) => {
         }
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
+      let hermesRes: any;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
 
-      const hermesRes = await fetch(targetUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: formattedMessages,
-          temperature,
-          max_tokens: 350,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+        hermesRes = await fetch(targetUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+      } catch (fetchErr: any) {
+        const isAbort = fetchErr.name === 'AbortError' || fetchErr.message?.includes('aborted');
+        const reason = isAbort && isPrivate
+          ? `Tiempo agotado con ${targetUrl}. La nube de AI Studio no tiene ruta a tu IP privada o Tailscale.`
+          : (fetchErr.message || 'Error de conexión con Hermes');
+
+        const ai = getGenAI();
+        if (ai) {
+          const fallbackRes = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: messages[messages.length - 1]?.content || 'Hola',
+            config: {
+              systemInstruction: `${baseSystem} [Nota del sistema: ${reason}. Responde al usuario de forma natural indicando brevemente lo que ocurre si preguntan por la conexión.]`,
+              temperature,
+            }
+          });
+          return res.json({
+            text: fallbackRes.text || 'Hola, no se pudo conectar con tu servidor Hermes privado desde la nube.',
+            usedProvider: 'potato_gemini_fallback',
+            model: 'gemini-3.8-flash',
+            warning: reason,
+          });
+        }
+
+        return res.status(504).json({
+          error: reason,
+        });
+      }
 
       if (!hermesRes.ok) {
         const errorText = await hermesRes.text();
+        let parsedMessage = errorText;
+        try {
+          const json = JSON.parse(errorText);
+          parsedMessage = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || errorText;
+        } catch {}
+
         // If Hermes returned an auth or rate limit error and we have Gemini available, provide helpful fallback
         const ai = getGenAI();
         if (ai) {
@@ -187,21 +274,22 @@ app.post('/api/chat', async (req: Request, res: Response) => {
             text: fallbackRes.text || 'Hola, te escucho.',
             usedProvider: 'potato_gemini_fallback',
             model: 'gemini-3.8-flash',
-            warning: `Hermes respondió con error ${hermesRes.status}, usando motor Potato integrado.`,
+            warning: `Hermes respondió con error ${hermesRes.status}: ${parsedMessage.slice(0, 150)}`,
           });
         }
 
         return res.status(hermesRes.status).json({
-          error: `Hermes API Error (${hermesRes.status}): ${errorText.slice(0, 300)}`,
+          error: `Hermes API Error (${hermesRes.status}): ${parsedMessage.slice(0, 300)}`,
         });
       }
 
       const data = await hermesRes.json();
-      const outputText = data.choices?.[0]?.message?.content || '';
+      const outputText = data.choices?.[0]?.message?.content ?? data.hermes?.error ?? '';
       return res.json({
         text: outputText,
         usedProvider: provider,
-        model,
+        model: data.model || model,
+        hermes: data.hermes,
       });
     }
 

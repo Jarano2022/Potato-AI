@@ -55,6 +55,13 @@ export class AudioEngine {
    */
   public async startMicrophone(): Promise<MediaStream> {
     this.stopTestMode();
+
+    if (typeof window === 'undefined' || !navigator?.mediaDevices?.getUserMedia) {
+      const err = new Error('La captura de micrófono no está soportada en este entorno o navegador.');
+      err.name = 'NotSupportedError';
+      throw err;
+    }
+
     const ctx = await this.getAudioContext();
     const analyser = await this.setupAnalyser();
 
@@ -62,15 +69,28 @@ export class AudioEngine {
       this.stopMicrophone();
     }
 
-    // Request mono audio stream
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1, // Mono audio channel
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    let stream: MediaStream;
+    try {
+      // Primary attempt: Request mono audio stream with standard filters
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1, // Mono audio channel
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (primaryErr: any) {
+      // If error is caused by unsupported constraints, try fallback with basic audio
+      if (
+        primaryErr?.name === 'OverconstrainedError' ||
+        primaryErr?.name === 'ConstraintNotSatisfiedError'
+      ) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } else {
+        throw primaryErr;
+      }
+    }
 
     this.micStream = stream;
     this.micSource = ctx.createMediaStreamSource(stream);

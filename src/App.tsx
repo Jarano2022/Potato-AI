@@ -4,11 +4,14 @@ import { CavaVisualizer } from './components/CavaVisualizer.tsx';
 import { VoiceController } from './components/VoiceController.tsx';
 import { ChatTranscript, ChatMessage } from './components/ChatTranscript.tsx';
 import { HermesSettingsModal, HermesConfig } from './components/HermesSettingsModal.tsx';
+import { MicPermissionBanner } from './components/MicPermissionBanner.tsx';
 import { audioEngine } from './utils/audioEngine.ts';
 import { speechEngine } from './utils/speechEngine.ts';
 import { callHermesDirectly } from './utils/hermesClient.ts';
 
-const LOCAL_STORAGE_KEY = 'potato_hermes_config_v4';
+const LOCAL_STORAGE_KEY = 'potato_hermes_config_v5';
+const DEFAULT_HERMES_ENDPOINT = 'http://192.168.1.199:8642/v1/chat/completions';
+const DEFAULT_HERMES_TOKEN = '2c0e16d8cb65e8a8e3733897a326009903ba77cefea321ee1354d224ec94';
 
 export default function App() {
   const [config, setConfig] = useState<HermesConfig>(() => {
@@ -18,13 +21,13 @@ export default function App() {
         if (saved) {
           const parsed = JSON.parse(saved);
           return {
-            provider: parsed.provider || 'hermes_agent_local',
-            endpoint: parsed.endpoint || 'http://127.0.0.1:8642/v1/chat/completions',
-            apiKey: parsed.apiKey || '',
+            provider: parsed.provider || 'hermes_agent_lan',
+            endpoint: parsed.endpoint || DEFAULT_HERMES_ENDPOINT,
+            apiKey: parsed.apiKey || DEFAULT_HERMES_TOKEN,
             model: parsed.model || 'hermes-agent',
             systemPrompt:
               parsed.systemPrompt ||
-              'Eres "Potato", un asistente de voz conciso y natural conectado con Hermes Agent (hermes-agent.ai). Responde siempre en español conversacional de forma breve (1 a 2 oraciones por turno para hablar fluidamente).',
+              'Eres "Potato", un asistente de voz conciso y natural conectado con Hermes Agent. Responde siempre en español conversacional breve.',
             temperature: parsed.temperature ?? 0.7,
             handsFree: Boolean(parsed.handsFree),
             voiceName: parsed.voiceName || '',
@@ -39,12 +42,12 @@ export default function App() {
     }
 
     return {
-      provider: 'hermes_agent_local',
-      endpoint: 'http://127.0.0.1:8642/v1/chat/completions',
-      apiKey: '',
+      provider: 'hermes_agent_lan',
+      endpoint: DEFAULT_HERMES_ENDPOINT,
+      apiKey: DEFAULT_HERMES_TOKEN,
       model: 'hermes-agent',
       systemPrompt:
-        'Eres "Potato", un asistente de voz conciso y natural conectado con Hermes Agent (hermes-agent.ai). Responde siempre en español conversacional de forma breve (1 a 2 oraciones por turno para hablar fluidamente).',
+        'Eres "Potato", un asistente de voz conciso y natural conectado con Hermes Agent. Responde siempre en español conversacional breve.',
       temperature: 0.7,
       handsFree: false,
       voiceName: '',
@@ -71,6 +74,7 @@ export default function App() {
   const [isTestMode, setIsTestMode] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [showMicBanner, setShowMicBanner] = useState(false);
 
   const isHandsFreeRef = useRef(config.handsFree);
   isHandsFreeRef.current = config.handsFree;
@@ -93,6 +97,7 @@ export default function App() {
   }, []);
 
   const handleStartRecording = async () => {
+    setShowMicBanner(false);
     try {
       speechEngine.stopSpeaking();
       audioEngine.stopAudioPlayback();
@@ -100,7 +105,21 @@ export default function App() {
       setIsTestMode(false);
       setIsSpeaking(false);
 
-      await audioEngine.startMicrophone();
+      // Attempt microphone capture
+      let micReady = false;
+      try {
+        await audioEngine.startMicrophone();
+        micReady = true;
+      } catch (micErr: any) {
+        console.warn('Microphone stream could not be started in current context:', micErr?.message || micErr);
+        setShowMicBanner(true);
+        setIsRecording(false);
+        audioEngine.stopMicrophone();
+        return;
+      }
+
+      if (!micReady) return;
+
       setIsRecording(true);
       setInterimTranscript('');
 
@@ -113,9 +132,12 @@ export default function App() {
           }
         },
         onError: (err: string) => {
-          console.warn('Speech error:', err);
+          console.warn('Speech recognition warning:', err);
           setIsRecording(false);
           audioEngine.stopMicrophone();
+          if (err === 'not-allowed' || err.includes('not-allowed')) {
+            setShowMicBanner(true);
+          }
         },
         onEnd: () => {
           setIsRecording(false);
@@ -123,7 +145,8 @@ export default function App() {
         },
       });
     } catch (err: any) {
-      console.error('Mic error:', err);
+      console.warn('Mic access warning:', err?.message || err);
+      setShowMicBanner(true);
       setIsRecording(false);
       audioEngine.stopMicrophone();
     }
@@ -183,7 +206,7 @@ export default function App() {
 
       await speakPotatoResponse(replyText);
     } catch (err: any) {
-      console.error('Hermes error:', err);
+      console.warn('Hermes error:', err);
       setIsThinking(false);
 
       const errorMsg: ChatMessage = {
@@ -260,6 +283,27 @@ export default function App() {
             onSensitivityChange={(val) => setConfig((c) => ({ ...c, sensitivity: val }))}
           />
         </section>
+
+        {/* Microphone Permission Notice Banner if blocked */}
+        {showMicBanner && (
+          <section className="w-full">
+            <MicPermissionBanner
+              onDismiss={() => setShowMicBanner(false)}
+              onOpenInNewTab={() => window.open(window.location.href, '_blank')}
+              onActivateSimulation={() => {
+                setShowMicBanner(false);
+                handleRunAudioTest();
+              }}
+              onFocusTextInput={() => {
+                setShowMicBanner(false);
+                setTimeout(() => {
+                  const inputEl = document.getElementById('voice-chat-text-input');
+                  inputEl?.focus();
+                }, 50);
+              }}
+            />
+          </section>
+        )}
 
         {/* Central Voice Control */}
         <section className="w-full">

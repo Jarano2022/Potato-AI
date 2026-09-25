@@ -7,6 +7,7 @@ interface CavaVisualizerProps {
   sensitivity?: number;
   isRecording?: boolean;
   isSpeaking?: boolean;
+  isThinking?: boolean;
   color?: string; // Single solid color, defaults to clean vibrant amber/orange '#f97316'
   onBarCountChange?: (count: number) => void;
   onSensitivityChange?: (val: number) => void;
@@ -17,6 +18,7 @@ export const CavaVisualizer: React.FC<CavaVisualizerProps> = ({
   sensitivity = 1.3,
   isRecording = false,
   isSpeaking = false,
+  isThinking = false,
   color = '#f97316',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -113,6 +115,11 @@ export const CavaVisualizer: React.FC<CavaVisualizerProps> = ({
           }
           const avg = count > 0 ? binSum / count : 0;
           targetNorm = (avg / 255) * sensitivity;
+        } else if (isThinking) {
+          // Energetic harmonic pulse while Hermes is thinking or streaming tokens
+          const t = now * 0.0035;
+          const wave = Math.sin(t + i * 0.18) * 0.5 + 0.5;
+          targetNorm = 0.04 + wave * 0.11;
         } else {
           // Gentle resting harmonic pulse: ultra-smooth sine wave when idle
           const t = now * 0.0018;
