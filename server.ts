@@ -63,7 +63,12 @@ function isPrivateNetworkAddress(urlStr: string): boolean {
 // Route: Test Hermes connection (e.g. Hermes Agent daemon, OpenRouter, Ollama, custom URL)
 app.post('/api/hermes/test', async (req: Request, res: Response) => {
   const { endpoint, apiKey, model } = req.body;
-  const targetUrl = endpoint || 'http://192.168.1.199:8642/v1/chat/completions';
+  let targetUrl = (endpoint || 'http://100.94.150.43:8642/v1/chat/completions').trim();
+  if (targetUrl.startsWith('://')) targetUrl = 'http' + targetUrl;
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'http://' + targetUrl;
+  }
+
   const isHermesAgent = model === 'hermes-agent' || targetUrl.includes(':8642');
   const isPrivate = isPrivateNetworkAddress(targetUrl);
   
@@ -77,15 +82,16 @@ app.post('/api/hermes/test', async (req: Request, res: Response) => {
 
     const payload: any = {
       model: model || 'hermes-agent',
-      messages: [{ role: 'user', content: 'Di "Hermes conectado" en dos palabras.' }],
+      messages: [{ role: 'user', content: 'Hola Hermes' }],
     };
     if (!isHermesAgent) {
-      payload.max_tokens = 15;
+      payload.max_tokens = 60;
       payload.temperature = 0.7;
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
+    // Hermes Agent reasoning can take 10-25 seconds; allow generous timeout
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
     const apiRes = await fetch(targetUrl, {
       method: 'POST',
@@ -100,7 +106,7 @@ app.post('/api/hermes/test', async (req: Request, res: Response) => {
       let parsedErr = errText;
       try {
         const json = JSON.parse(errText);
-        parsedErr = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || errText;
+        parsedErr = json.choices?.[0]?.message?.content || json.choices?.[0]?.message?.reasoning_content || json.hermes?.error || json.error?.message || errText;
       } catch {}
       return res.status(apiRes.status).json({
         ok: false,
@@ -108,16 +114,17 @@ app.post('/api/hermes/test', async (req: Request, res: Response) => {
       });
     }
 
-    const data = await apiRes.json();
-    const reply = data.choices?.[0]?.message?.content || data.hermes?.error || 'Conexión exitosa';
+    const data: any = await apiRes.json();
+    const choiceMsg = data.choices?.[0]?.message;
+    const reply = choiceMsg?.content || choiceMsg?.reasoning_content || data.hermes?.error || 'Conexión exitosa';
     return res.json({ ok: true, reply, hermes: data.hermes });
   } catch (error: any) {
     const isAbort = error.name === 'AbortError' || error.message?.includes('aborted');
     let friendlyError = error.message || 'Error conectando con Hermes';
     if (isAbort && isPrivate) {
-      friendlyError = `Tiempo agotado con ${targetUrl}. La app está corriendo en la nube (AI Studio) y los servidores de Google no tienen acceso a redes privadas o Tailscale (${targetUrl}). Ejecuta la app localmente con 'npm run dev' en tu PC o crea un túnel HTTPS (Cloudflare Tunnel o Tailscale Funnel).`;
+      friendlyError = `Tiempo agotado con ${targetUrl} (45s). La app está corriendo en la nube (AI Studio) y los servidores de Google no tienen acceso a redes privadas o Tailscale (${targetUrl}). Ejecuta la app localmente con 'npm run dev' en tu PC o crea un túnel HTTPS (Cloudflare Tunnel o Tailscale Funnel).`;
     } else if (isAbort) {
-      friendlyError = `Tiempo de espera agotado (timeout) al conectar con ${targetUrl}.`;
+      friendlyError = `Tiempo de espera agotado (timeout 45s) al conectar con ${targetUrl}.`;
     }
 
     return res.status(500).json({
@@ -146,7 +153,12 @@ app.post('/api/chat', async (req: Request, res: Response) => {
 
     // Check if user is routing through Hermes
     if (provider.startsWith('hermes_')) {
-      const targetUrl = endpoint || (provider === 'hermes_ollama' ? 'http://localhost:11434/v1/chat/completions' : 'http://192.168.1.199:8642/v1/chat/completions');
+      let targetUrl = (endpoint || 'http://100.94.150.43:8642/v1/chat/completions').trim();
+      if (targetUrl.startsWith('://')) targetUrl = 'http' + targetUrl;
+      if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+        targetUrl = 'http://' + targetUrl;
+      }
+
       const isHermesAgent = model === 'hermes-agent' || targetUrl.includes(':8642');
       const isPrivate = isPrivateNetworkAddress(targetUrl);
       
@@ -213,7 +225,8 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       let hermesRes: any;
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        // Generous 60-second timeout for Hermes reasoning
+        const timeout = setTimeout(() => controller.abort(), 60000);
 
         hermesRes = await fetch(targetUrl, {
           method: 'POST',
@@ -225,7 +238,7 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       } catch (fetchErr: any) {
         const isAbort = fetchErr.name === 'AbortError' || fetchErr.message?.includes('aborted');
         const reason = isAbort && isPrivate
-          ? `Tiempo agotado con ${targetUrl}. La nube de AI Studio no tiene ruta a tu IP privada o Tailscale.`
+          ? `Tiempo agotado con ${targetUrl} (60s). La nube de AI Studio no tiene ruta a tu IP privada o Tailscale.`
           : (fetchErr.message || 'Error de conexión con Hermes');
 
         const ai = getGenAI();
@@ -256,7 +269,7 @@ app.post('/api/chat', async (req: Request, res: Response) => {
         let parsedMessage = errorText;
         try {
           const json = JSON.parse(errorText);
-          parsedMessage = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || errorText;
+          parsedMessage = json.choices?.[0]?.message?.content || json.choices?.[0]?.message?.reasoning_content || json.hermes?.error || json.error?.message || errorText;
         } catch {}
 
         // If Hermes returned an auth or rate limit error and we have Gemini available, provide helpful fallback
@@ -284,7 +297,8 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       }
 
       const data = await hermesRes.json();
-      const outputText = data.choices?.[0]?.message?.content ?? data.hermes?.error ?? '';
+      const choiceMsg = data.choices?.[0]?.message;
+      const outputText = choiceMsg?.content || choiceMsg?.reasoning_content || data.hermes?.error || '';
       return res.json({
         text: outputText,
         usedProvider: provider,

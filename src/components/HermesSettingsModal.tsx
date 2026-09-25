@@ -346,7 +346,12 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
           <button
             type="button"
             onClick={() => {
-              onSave(draft);
+              let cleanEndpoint = draft.endpoint.trim();
+              if (cleanEndpoint.startsWith('://')) cleanEndpoint = 'http' + cleanEndpoint;
+              if (!cleanEndpoint.startsWith('http://') && !cleanEndpoint.startsWith('https://')) {
+                cleanEndpoint = 'http://' + cleanEndpoint;
+              }
+              onSave({ ...draft, endpoint: cleanEndpoint });
               onClose();
             }}
             className="px-4 py-1.5 text-xs font-semibold text-white bg-orange-600 hover:bg-orange-500 rounded-lg transition-colors"

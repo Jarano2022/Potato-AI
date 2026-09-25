@@ -23,7 +23,7 @@ export interface HermesDirectResponse {
 
 export async function callHermesDirectly(params: HermesDirectRequest): Promise<HermesDirectResponse> {
   const {
-    endpoint = 'http://192.168.1.199:8642/v1/chat/completions',
+    endpoint = 'http://100.94.150.43:8642/v1/chat/completions',
     apiKey = '',
     model = 'hermes-agent',
     messages,
@@ -32,7 +32,13 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
     systemPrompt = 'Eres "Potato", un asistente de voz carismático, directo e ingenioso impulsado por Hermes. Responde siempre en español claro, conciso y natural (máximo 2 a 3 oraciones para escucha fluida por voz). No uses listas largas ni markdown pesado.',
   } = params;
 
-  const isHermesAgent = model === 'hermes-agent' || endpoint.includes(':8642');
+  let cleanEndpoint = (endpoint || 'http://100.94.150.43:8642/v1/chat/completions').trim();
+  if (cleanEndpoint.startsWith('://')) cleanEndpoint = 'http' + cleanEndpoint;
+  if (!cleanEndpoint.startsWith('http://') && !cleanEndpoint.startsWith('https://')) {
+    cleanEndpoint = 'http://' + cleanEndpoint;
+  }
+
+  const isHermesAgent = model === 'hermes-agent' || cleanEndpoint.includes(':8642');
 
   // For Hermes Agent daemon, send pure user/assistant message array (no prepended system prompt) matching curl
   const formattedMessages = isHermesAgent
@@ -57,7 +63,7 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
   }
 
   // OpenRouter recommended headers for pure frontend clients
-  if (endpoint.includes('openrouter.ai')) {
+  if (cleanEndpoint.includes('openrouter.ai')) {
     headers['HTTP-Referer'] = window.location.origin;
     headers['X-Title'] = 'Potato Hermes Voice Chat';
   }
@@ -65,7 +71,7 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
   // Exact payload matching: {"model": "hermes-agent", "messages": [{"role": "user", "content": "..."}]}
   const payload: any = {
     model: model || 'hermes-agent',
-    messages: formattedMessages.length > 0 ? formattedMessages : [{ role: 'user', content: 'Hola' }],
+    messages: formattedMessages.length > 0 ? formattedMessages : [{ role: 'user', content: 'Hola Hermes' }],
   };
 
   if (!isHermesAgent) {
@@ -76,9 +82,10 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
   try {
     // 1. First attempt: Direct fetch straight from the user's browser to the Hermes endpoint
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    // Hermes Agent reasoning can take 10-25 seconds; allow generous timeout
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(cleanEndpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -88,7 +95,8 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
 
     if (res.ok) {
       const data = await res.json();
-      const text = data.choices?.[0]?.message?.content ?? data.hermes?.error ?? '';
+      const choiceMsg = data.choices?.[0]?.message;
+      const text = choiceMsg?.content || choiceMsg?.reasoning_content || data.hermes?.error || '';
       return {
         text,
         model: data.model || model,
@@ -101,56 +109,47 @@ export async function callHermesDirectly(params: HermesDirectRequest): Promise<H
     let parsedErr = '';
     try {
       const json = JSON.parse(errData);
-      parsedErr = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || json.message || errData;
+      parsedErr = json.choices?.[0]?.message?.content || json.choices?.[0]?.message?.reasoning_content || json.hermes?.error || json.error?.message || json.message || errData;
     } catch {
       parsedErr = errData.slice(0, 250);
     }
 
     throw new Error(`Hermes API (${res.status}): ${parsedErr}`);
   } catch (browserError: any) {
-    // If it failed due to CORS or local network restrictions (e.g. 192.168.x / localhost from https iframe), route through transparent proxy
-    const isCorsOrNetwork =
-      browserError.name === 'TypeError' ||
-      browserError.message?.includes('Failed to fetch') ||
-      browserError.message?.includes('NetworkError');
+    // If it failed due to CORS, timeout, or local network restrictions, route through transparent server relay
+    console.warn('Direct browser fetch failed or blocked by CORS, routing via server relay...', browserError);
+    
+    const relayRes = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: cleanEndpoint,
+        apiKey,
+        model,
+        messages,
+        systemPrompt,
+        temperature,
+        provider: 'hermes_custom',
+      }),
+    });
 
-    if (isCorsOrNetwork) {
-      console.warn('Direct browser fetch blocked by CORS or network, routing via server relay...', browserError);
-      
-      const relayRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          endpoint,
-          apiKey,
-          model,
-          messages,
-          systemPrompt,
-          temperature,
-          provider: 'hermes_custom',
-        }),
-      });
-
-      if (!relayRes.ok) {
-        const errText = await relayRes.text();
-        let parsed = errText;
-        try {
-          const json = JSON.parse(errText);
-          parsed = json.choices?.[0]?.message?.content || json.hermes?.error || json.error || errText;
-        } catch {}
-        throw new Error(parsed || 'Error al conectar con Hermes');
-      }
-
-      const data = await relayRes.json();
-      return {
-        text: data.text,
-        model: data.model || model,
-        provider: 'hermes_relay',
-        directBrowserCall: false,
-      };
+    if (!relayRes.ok) {
+      const errText = await relayRes.text();
+      let parsed = errText;
+      try {
+        const json = JSON.parse(errText);
+        parsed = json.choices?.[0]?.message?.content || json.choices?.[0]?.message?.reasoning_content || json.hermes?.error || json.error || errText;
+      } catch {}
+      throw new Error(parsed || 'Error al conectar con Hermes');
     }
 
-    throw browserError;
+    const data = await relayRes.json();
+    return {
+      text: data.text,
+      model: data.model || model,
+      provider: 'hermes_relay',
+      directBrowserCall: false,
+    };
   }
 }
 
@@ -173,8 +172,14 @@ export async function testHermesDirectConnection(
   apiKey: string,
   model: string
 ): Promise<{ ok: boolean; message: string; direct: boolean; isPrivateIssue?: boolean }> {
-  const isHermesAgent = model === 'hermes-agent' || endpoint.includes(':8642');
-  const isPrivate = isPrivateNetworkAddress(endpoint);
+  let cleanEndpoint = (endpoint || 'http://100.94.150.43:8642/v1/chat/completions').trim();
+  if (cleanEndpoint.startsWith('://')) cleanEndpoint = 'http' + cleanEndpoint;
+  if (!cleanEndpoint.startsWith('http://') && !cleanEndpoint.startsWith('https://')) {
+    cleanEndpoint = 'http://' + cleanEndpoint;
+  }
+
+  const isHermesAgent = model === 'hermes-agent' || cleanEndpoint.includes(':8642');
+  const isPrivate = isPrivateNetworkAddress(cleanEndpoint);
   const isCloudHost = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
 
   try {
@@ -184,23 +189,24 @@ export async function testHermesDirectConnection(
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey.trim()}`;
     }
-    if (endpoint.includes('openrouter.ai')) {
+    if (cleanEndpoint.includes('openrouter.ai')) {
       headers['HTTP-Referer'] = window.location.origin;
       headers['X-Title'] = 'Potato Hermes Voice Chat';
     }
 
     const payload: any = {
       model: model || 'hermes-agent',
-      messages: [{ role: 'user', content: 'Di "Hermes conectado" en dos palabras.' }],
+      messages: [{ role: 'user', content: 'Hola Hermes' }],
     };
     if (!isHermesAgent) {
-      payload.max_tokens = 15;
+      payload.max_tokens = 60;
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    // Allow 45s for Hermes reasoning
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(cleanEndpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -210,7 +216,8 @@ export async function testHermesDirectConnection(
 
     if (res.ok) {
       const data = await res.json();
-      const reply = data.choices?.[0]?.message?.content || data.hermes?.error || 'Conexión exitosa';
+      const choiceMsg = data.choices?.[0]?.message;
+      const reply = choiceMsg?.content || choiceMsg?.reasoning_content || data.hermes?.error || 'Conexión exitosa';
       return { ok: true, message: `Conexión directa desde tu navegador: "${reply.trim()}"`, direct: true };
     }
 
@@ -218,7 +225,7 @@ export async function testHermesDirectConnection(
     let parsedErr = err;
     try {
       const json = JSON.parse(err);
-      parsedErr = json.choices?.[0]?.message?.content || json.hermes?.error || json.error?.message || err;
+      parsedErr = json.choices?.[0]?.message?.content || json.choices?.[0]?.message?.reasoning_content || json.hermes?.error || json.error?.message || err;
     } catch {}
     return { ok: false, message: `Error HTTP ${res.status}: ${parsedErr.slice(0, 180)}`, direct: true };
   } catch (err: any) {
@@ -227,7 +234,7 @@ export async function testHermesDirectConnection(
       const resProxy = await fetch('/api/hermes/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint, apiKey, model }),
+        body: JSON.stringify({ endpoint: cleanEndpoint, apiKey, model }),
       });
       const data = await resProxy.json();
       if (resProxy.ok && data.ok) {
