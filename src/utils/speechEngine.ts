@@ -16,7 +16,8 @@ export class SpeechEngine {
   private isListening: boolean = false;
   private synth: SpeechSynthesis | null = null;
   private selectedVoice: SpeechSynthesisVoice | null = null;
-  private simulatedTtsTimer: any = null;
+  private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private cachedVoices: SpeechSynthesisVoice[] = [];
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -29,6 +30,10 @@ export class SpeechEngine {
       }
       if ('speechSynthesis' in window) {
         this.synth = window.speechSynthesis;
+        this.cachedVoices = this.synth.getVoices() || [];
+        this.synth.onvoiceschanged = () => {
+          this.cachedVoices = this.synth?.getVoices() || [];
+        };
       }
     }
   }
@@ -129,25 +134,48 @@ export class SpeechEngine {
     } = {}
   ): void {
     if (!this.synth) {
-      options.onError?.('Síntesis de voz no disponible');
+      options.onError?.('Síntesis de voz no disponible en este navegador');
       return;
     }
 
     this.stopSpeaking();
 
+    // In Chromium on Linux, SpeechSynthesis can get stuck in a paused state
+    try {
+      if (this.synth.paused) {
+        this.synth.resume();
+      }
+    } catch (e) {
+      // ignore
+    }
+
     const utterance = new SpeechSynthesisUtterance(text);
+    this.currentUtterance = utterance; // Prevent garbage collection bug in Chromium
+
     utterance.rate = options.rate || 1.0;
     utterance.pitch = options.pitch || 1.0;
     utterance.lang = 'es-ES';
 
-    const voices = this.synth.getVoices();
+    const voices = this.synth.getVoices().length > 0 ? this.synth.getVoices() : this.cachedVoices;
     if (options.voiceName) {
       const match = voices.find((v) => v.name === options.voiceName);
       if (match) utterance.voice = match;
-    } else {
-      // Pick best Spanish voice if available
-      const esVoice = voices.find((v) => v.lang.startsWith('es') && !v.name.includes('Google'));
-      if (esVoice) utterance.voice = esVoice;
+    }
+    
+    if (!utterance.voice && voices.length > 0) {
+      // 1. Pick any Spanish voice (including Google, Microsoft, eSpeak, etc.)
+      const esVoice = voices.find(
+        (v) =>
+          v.lang.toLowerCase().startsWith('es') ||
+          v.name.toLowerCase().includes('spanish') ||
+          v.name.toLowerCase().includes('español')
+      );
+      if (esVoice) {
+        utterance.voice = esVoice;
+      } else {
+        // Fallback to default voice or first available so it never stays mute
+        utterance.voice = voices.find((v) => v.default) || voices[0];
+      }
     }
 
     utterance.onstart = () => {
@@ -158,15 +186,23 @@ export class SpeechEngine {
 
     utterance.onend = () => {
       audioEngine.stopTestMode();
+      this.currentUtterance = null;
       options.onEnd?.();
     };
 
     utterance.onerror = (e) => {
       audioEngine.stopTestMode();
+      this.currentUtterance = null;
       options.onError?.(e);
     };
 
-    this.synth.speak(utterance);
+    try {
+      this.synth.speak(utterance);
+    } catch (err) {
+      audioEngine.stopTestMode();
+      this.currentUtterance = null;
+      options.onError?.(err);
+    }
   }
 
   public stopSpeaking(): void {
@@ -177,12 +213,14 @@ export class SpeechEngine {
         // ignore
       }
     }
+    this.currentUtterance = null;
     audioEngine.stopTestMode();
   }
 
   public getAvailableVoices(): SpeechSynthesisVoice[] {
     if (!this.synth) return [];
-    return this.synth.getVoices();
+    const v = this.synth.getVoices();
+    return v.length > 0 ? v : this.cachedVoices;
   }
 }
 

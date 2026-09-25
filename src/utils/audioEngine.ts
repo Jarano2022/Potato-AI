@@ -213,7 +213,17 @@ export class AudioEngine {
    */
   public async playBase64Audio(base64Data: string, sampleRate = 24000): Promise<void> {
     const ctx = await this.getAudioContext();
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch (e) {
+        // ignore
+      }
+    }
     const analyser = await this.setupAnalyser();
+
+    // Stop any previous active source
+    this.stopAudioPlayback();
 
     // Decode base64 to binary
     const binary = atob(base64Data);
@@ -231,10 +241,16 @@ export class AudioEngine {
       audioBuffer = await ctx.decodeAudioData(bufferCopy);
     } catch {
       // If raw PCM 16-bit 24kHz mono
-      const pcm16 = new Int16Array(bytes.buffer);
-      audioBuffer = ctx.createBuffer(1, pcm16.length, sampleRate);
+      const numSamples = Math.floor(bytes.length / 2);
+      // Ensure aligned 2-byte buffer
+      const alignedBuffer = new ArrayBuffer(numSamples * 2);
+      const alignedView = new Uint8Array(alignedBuffer);
+      alignedView.set(bytes.subarray(0, numSamples * 2));
+      const pcm16 = new Int16Array(alignedBuffer);
+
+      audioBuffer = ctx.createBuffer(1, numSamples, sampleRate);
       const channelData = audioBuffer.getChannelData(0);
-      for (let i = 0; i < pcm16.length; i++) {
+      for (let i = 0; i < numSamples; i++) {
         channelData[i] = pcm16[i] / 32768.0;
       }
     }
@@ -252,6 +268,9 @@ export class AudioEngine {
           source.disconnect();
         } catch (e) {
           // ignore
+        }
+        if (this.activeAudioSource === source) {
+          this.activeAudioSource = null;
         }
         resolve();
       };

@@ -292,11 +292,69 @@ export default function App() {
   const speakPotatoResponse = async (text: string) => {
     setIsSpeaking(true);
 
+    const availableVoices = speechEngine.getAvailableVoices();
+    const hasSpanishBrowserVoice = availableVoices.some(
+      (v) =>
+        v.lang.toLowerCase().startsWith('es') ||
+        v.name.toLowerCase().includes('spanish') ||
+        v.name.toLowerCase().includes('español')
+    );
+
+    // Helper: attempt server-side Neural TTS
+    const tryServerTts = async (): Promise<boolean> => {
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: 'Kore' }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.audioData) {
+            setIsSpeaking(true);
+            await audioEngine.playBase64Audio(data.audioData, data.sampleRate || 24000);
+            onFinishSpeaking();
+            return true;
+          }
+        }
+      } catch (ttsErr) {
+        console.warn('Server TTS error:', ttsErr);
+      }
+      return false;
+    };
+
+    // If browser has 0 voices (common in Linux Chromium without speech-dispatcher), try server TTS first!
+    if (availableVoices.length === 0) {
+      const serverTtsOk = await tryServerTts();
+      if (serverTtsOk) return;
+    }
+
+    // Try browser SpeechSynthesis
+    let browserSpoke = false;
     speechEngine.speakText(text, {
       voiceName: config.voiceName,
-      onStart: () => setIsSpeaking(true),
-      onEnd: () => onFinishSpeaking(),
-      onError: () => onFinishSpeaking(),
+      onStart: () => {
+        browserSpoke = true;
+        setIsSpeaking(true);
+      },
+      onEnd: () => {
+        onFinishSpeaking();
+      },
+      onError: async (err) => {
+        console.warn('Browser speech synthesis error, trying server TTS fallback:', err);
+        // Fallback to server TTS if browser failed
+        const serverTtsOk = await tryServerTts();
+        if (!serverTtsOk) {
+          onFinishSpeaking();
+          setShowMicBanner(true);
+          setMicBannerData({
+            title: 'Tu navegador no pudo reproducir la voz',
+            message:
+              'En Chromium sobre Linux, el sistema de voz requiere speech-dispatcher. Ejecuta en tu terminal: "sudo apt install speech-dispatcher speech-dispatcher-espeak-ng", o configura GEMINI_API_KEY en tu .env para voz neuronal en la nube.',
+          });
+        }
+      },
     });
   };
 

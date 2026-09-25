@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Key, RefreshCw, AlertCircle, ShieldCheck, ExternalLink, Bot, Cpu, Terminal, Laptop } from 'lucide-react';
+import { X, Check, Key, RefreshCw, AlertCircle, ShieldCheck, ExternalLink, Bot, Cpu, Terminal, Laptop, Volume2 } from 'lucide-react';
 import { testHermesDirectConnection, isPrivateNetworkAddress } from '../utils/hermesClient.ts';
+import { speechEngine } from '../utils/speechEngine.ts';
+import { audioEngine } from '../utils/audioEngine.ts';
 
 export interface HermesConfig {
   provider: 'hermes_agent_lan' | 'hermes_agent_tailscale' | 'hermes_agent_local' | 'hermes_agent_nous_portal' | 'hermes_openrouter' | 'hermes_ollama' | 'hermes_custom';
@@ -35,6 +37,8 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; isPrivateIssue?: boolean } | null>(null);
   const [hasServerEnvKey, setHasServerEnvKey] = useState(false);
+  const [testingVoice, setTestingVoice] = useState(false);
+  const [voiceTestStatus, setVoiceTestStatus] = useState<string>('');
 
   useEffect(() => {
     fetch('/api/hermes/status')
@@ -49,6 +53,47 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
 
   const isCloudEnvironment = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
   const isPrivateEndpoint = isPrivateNetworkAddress(draft.endpoint);
+
+  const handleTestVoice = async () => {
+    setTestingVoice(true);
+    setVoiceTestStatus('Reproduciendo audio de prueba...');
+
+    const testPhrase = 'Hola, soy Hermes Potato. Tu salida de audio está funcionando.';
+
+    // Try server neural TTS first
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: testPhrase, voice: 'Kore' }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.audioData) {
+          await audioEngine.playBase64Audio(data.audioData, data.sampleRate || 24000);
+          setVoiceTestStatus('✓ Voz neural reproducida con éxito');
+          setTestingVoice(false);
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore, fallback to browser
+    }
+
+    // Fallback to browser speech
+    speechEngine.speakText(testPhrase, {
+      voiceName: draft.voiceName,
+      onStart: () => setVoiceTestStatus('✓ Reproduciendo voz del navegador...'),
+      onEnd: () => {
+        setVoiceTestStatus('✓ Prueba de voz finalizada');
+        setTestingVoice(false);
+      },
+      onError: (err) => {
+        setVoiceTestStatus('Error de voz: En Linux ejecuta: sudo apt install speech-dispatcher speech-dispatcher-espeak-ng');
+        setTestingVoice(false);
+      },
+    });
+  };
 
   const handleProviderSelect = (provider: HermesConfig['provider']) => {
     let endpoint = draft.endpoint;
@@ -293,6 +338,62 @@ export const HermesSettingsModal: React.FC<HermesSettingsModalProps> = ({
                 className="w-full accent-orange-500 cursor-pointer"
               />
             </div>
+          </div>
+
+          {/* Voice Output (TTS) Settings */}
+          <div className="p-3 rounded-xl bg-[#141414] border border-white/5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[11px] font-mono text-stone-300">
+                <Volume2 className="w-3.5 h-3.5 text-orange-400" />
+                <span>Salida de Voz (Síntesis TTS)</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestVoice}
+                disabled={testingVoice}
+                className="px-2.5 py-1 text-[11px] font-mono rounded bg-orange-500/10 hover:bg-orange-500/20 text-orange-300 border border-orange-500/20 transition-colors flex items-center gap-1.5"
+              >
+                <Volume2 className={`w-3 h-3 ${testingVoice ? 'animate-bounce' : ''}`} />
+                <span>{testingVoice ? 'Hablando...' : 'Probar Voz'}</span>
+              </button>
+            </div>
+
+            {availableVoices.length > 0 ? (
+              <div>
+                <label className="block text-[10px] font-mono text-stone-500 mb-1">
+                  Voz del Navegador
+                </label>
+                <select
+                  value={draft.voiceName}
+                  onChange={(e) => setDraft({ ...draft, voiceName: e.target.value })}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-[#0d0d0d] border border-white/10 text-stone-300 font-mono text-[11px] focus:outline-none focus:border-orange-500"
+                >
+                  <option value="">Español Automático (Por Defecto)</option>
+                  {availableVoices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="p-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[10px] text-amber-300 space-y-1">
+                <div className="font-semibold">Aviso para Linux (Chromium):</div>
+                <div>
+                  Chromium en Linux no incluye voces por defecto. Si no escuchas a Hermes al pulsar &quot;Probar Voz&quot;, ejecuta en tu terminal:
+                </div>
+                <div className="font-mono bg-black/40 p-1 rounded text-orange-300 select-all">
+                  sudo apt install speech-dispatcher speech-dispatcher-espeak-ng
+                </div>
+                <div>O añade <span className="font-mono text-stone-200">GEMINI_API_KEY</span> a tu <span className="font-mono text-stone-200">.env</span> para voz neuronal automática.</div>
+              </div>
+            )}
+
+            {voiceTestStatus && (
+              <div className="text-[10px] font-mono text-stone-400">
+                {voiceTestStatus}
+              </div>
+            )}
           </div>
 
           {/* Test connection */}
