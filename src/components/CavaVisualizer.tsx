@@ -84,26 +84,89 @@ export const CavaVisualizer: React.FC<CavaVisualizerProps> = ({
       const analyser = audioEngine.getAnalyser();
       const isTest = audioEngine.getIsTestMode();
       let rawFrequencies: Uint8Array | null = null;
+      let hasRealAudio = false;
 
       if (analyser && !isTest) {
         const bufferLen = analyser.frequencyBinCount;
         const data = new Uint8Array(bufferLen);
         analyser.getByteFrequencyData(data);
         rawFrequencies = data;
+
+        // Check if there is actual acoustic volume in the analyser
+        let sum = 0;
+        const checkLen = Math.min(bufferLen, 64);
+        for (let b = 0; b < checkLen; b++) {
+          sum += data[b];
+        }
+        if (sum > 60) {
+          hasRealAudio = true;
+        }
       } else if (isTest) {
         rawFrequencies = audioEngine.getSyntheticFrequencies();
+        hasRealAudio = true;
       }
 
       const numBars = barCount;
       const barHeights = barHeightsRef.current;
       const totalBins = rawFrequencies ? rawFrequencies.length : 64;
 
+      // Speech rhythm clock for organic voice animation
+      const speechTime = now * 0.001;
+
       // Calculate fluid targets with smooth continuous curves
       for (let i = 0; i < numBars; i++) {
         let targetNorm = 0;
 
-        if (rawFrequencies && (isRecording || isSpeaking || isTest)) {
-          // Logarithmic distribution for natural audio perception (bass to treble)
+        if (isSpeaking) {
+          // Dynamic CAVA response when Hermes is speaking
+          if (hasRealAudio && rawFrequencies) {
+            // Live frequency data from Web Audio API (e.g. Neural TTS or routed audio)
+            const startBin = Math.floor(Math.pow(i / numBars, 1.35) * (totalBins * 0.75));
+            const endBin = Math.max(startBin + 1, Math.floor(Math.pow((i + 1) / numBars, 1.35) * (totalBins * 0.75)));
+
+            let binSum = 0;
+            let count = 0;
+            for (let b = startBin; b < endBin && b < totalBins; b++) {
+              binSum += rawFrequencies[b] || 0;
+              count++;
+            }
+            const avg = count > 0 ? binSum / count : 0;
+            // Boost dynamic range for voice presence
+            targetNorm = (avg / 255) * sensitivity * 1.35;
+          } else {
+            // Organic speech simulation for native browser SpeechSynthesis (which bypasses Web Audio)
+            // Syllabic modulation (3.8Hz speech syllable rhythm)
+            const syllable = Math.sin(speechTime * 22) * 0.35 + 0.65;
+            // Phrasing cadence & natural emphasis breathing (1.2Hz)
+            const phrase = Math.sin(speechTime * 7.2) * Math.cos(speechTime * 3.4);
+            const emphasis = Math.max(0.15, phrase * 0.45 + 0.55);
+
+            // Human speech formants:
+            // 1. Low fundamental frequency resonance (~120-250Hz, bars 12-25%)
+            const bassDist = Math.abs(i - numBars * 0.2) / (numBars * 0.22);
+            const bassFormant = Math.max(0, 1 - bassDist * bassDist) * (Math.sin(speechTime * 18 + i * 0.25) * 0.35 + 0.65);
+
+            // 2. Mid vowel formants (~500-1800Hz, bars 32-55%)
+            const midDist = Math.abs(i - numBars * 0.44) / (numBars * 0.28);
+            const midFormant = Math.max(0, 1 - midDist * midDist) * (Math.sin(speechTime * 28 + i * 0.42) * 0.4 + 0.6);
+
+            // 3. High speech presence / sibilance (~3-6kHz, bars 65-85%)
+            const hiDist = Math.abs(i - numBars * 0.75) / (numBars * 0.24);
+            const hiFormant = Math.max(0, 1 - hiDist * hiDist) * (Math.sin(speechTime * 44 + i * 0.65) * 0.3 + 0.7);
+
+            // Combined voice curve
+            const voiceCurve = bassFormant * 0.95 + midFormant * 1.15 + hiFormant * 0.55;
+            const dynamicVoice = voiceCurve * syllable * emphasis;
+
+            // Micro-harmonics for living acoustic visualizer texture
+            const texture = Math.sin(speechTime * 52 + i * 0.85) * 0.05;
+
+            targetNorm = (dynamicVoice * 0.8 + texture) * sensitivity;
+            // Keep a gentle lively floor while Hermes is speaking so bars don't go flat
+            targetNorm = Math.max(0.06, targetNorm);
+          }
+        } else if (isRecording && rawFrequencies) {
+          // User is speaking into microphone
           const startBin = Math.floor(Math.pow(i / numBars, 1.4) * (totalBins * 0.75));
           const endBin = Math.max(startBin + 1, Math.floor(Math.pow((i + 1) / numBars, 1.4) * (totalBins * 0.75)));
 
@@ -115,6 +178,10 @@ export const CavaVisualizer: React.FC<CavaVisualizerProps> = ({
           }
           const avg = count > 0 ? binSum / count : 0;
           targetNorm = (avg / 255) * sensitivity;
+        } else if (isTest && rawFrequencies) {
+          // Test mode
+          const bin = Math.min(totalBins - 1, Math.floor((i / numBars) * totalBins));
+          targetNorm = ((rawFrequencies[bin] || 0) / 255) * sensitivity;
         } else if (isThinking) {
           // Energetic harmonic pulse while Hermes is thinking or streaming tokens
           const t = now * 0.0035;
@@ -129,14 +196,16 @@ export const CavaVisualizer: React.FC<CavaVisualizerProps> = ({
 
         targetNorm = Math.min(1.0, Math.max(0, targetNorm));
 
-        // Fluid interpolation: smooth continuous spring lerp without harsh cuts or steps
+        // Fluid interpolation: organic spring lerp with fast attack and smooth decay
         const current = barHeights[i] || 0;
         if (targetNorm > current) {
-          // Swift, organic rise
-          barHeights[i] = current + (targetNorm - current) * Math.min(1, dt * 18);
+          // Snappy response to voice transients
+          const riseSpeed = isSpeaking ? 22 : 18;
+          barHeights[i] = current + (targetNorm - current) * Math.min(1, dt * riseSpeed);
         } else {
-          // Fluid exponential decay without jarring drops
-          barHeights[i] = current + (targetNorm - current) * Math.min(1, dt * 8.5);
+          // Smooth fluid decay without jarring steps
+          const fallSpeed = isSpeaking ? 11 : 8.5;
+          barHeights[i] = current + (targetNorm - current) * Math.min(1, dt * fallSpeed);
         }
       }
 

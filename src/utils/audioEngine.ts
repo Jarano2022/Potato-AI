@@ -58,8 +58,23 @@ export class AudioEngine {
   public async startMicrophone(): Promise<MediaStream> {
     this.stopTestMode();
 
+    const isRemoteInsecure =
+      typeof window !== 'undefined' &&
+      !window.isSecureContext &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1';
+
+    if (isRemoteInsecure) {
+      const err: any = new Error(
+        'Los navegadores bloquean el micrófono en direcciones HTTP remotas. Requiere HTTPS o habilitar el flag de Chrome.'
+      );
+      err.name = 'InsecureOriginError';
+      err.isRemoteInsecure = true;
+      throw err;
+    }
+
     if (typeof window === 'undefined' || !navigator?.mediaDevices?.getUserMedia) {
-      const err = new Error('La captura de micrófono no está soportada en este entorno o navegador.');
+      const err: any = new Error('La captura de micrófono no está disponible en este entorno o navegador.');
       err.name = 'NotSupportedError';
       throw err;
     }

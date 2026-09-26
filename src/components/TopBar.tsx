@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Radio, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Settings, Radio, CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
 import { HermesWsStatus } from '../utils/hermesWsClient.ts';
 
 interface TopBarProps {
@@ -9,6 +9,8 @@ interface TopBarProps {
   wsUrl?: string;
   onReconnectWs?: () => void;
   isOnline?: boolean;
+  isRemoteInsecure?: boolean;
+  onOpenRemoteMicHelp?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -18,6 +20,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   wsUrl = '',
   onReconnectWs,
   isOnline = true,
+  isRemoteInsecure = false,
+  onOpenRemoteMicHelp,
 }) => {
   const isWsMode = provider === 'hermes_ws_agent';
 
@@ -37,6 +41,19 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Status & Actions */}
         <div className="flex items-center gap-2.5">
+          {/* Insecure Remote Mic Warning Badge */}
+          {isRemoteInsecure && onOpenRemoteMicHelp && (
+            <button
+              type="button"
+              onClick={onOpenRemoteMicHelp}
+              className="px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[11px] font-mono flex items-center gap-1.5 hover:bg-amber-500/20 transition-all animate-pulse"
+              title="Haz clic para ver cómo activar el micrófono en este dispositivo remoto"
+            >
+              <ShieldAlert className="w-3 h-3 text-amber-400" />
+              <span>Activar micro en IP</span>
+            </button>
+          )}
+
           {/* Live Hermes Serve WebSocket Badge */}
           {isWsMode ? (
             <button

@@ -5,6 +5,7 @@ import { VoiceController } from './components/VoiceController.tsx';
 import { ChatTranscript, ChatMessage } from './components/ChatTranscript.tsx';
 import { HermesSettingsModal, HermesConfig } from './components/HermesSettingsModal.tsx';
 import { MicPermissionBanner } from './components/MicPermissionBanner.tsx';
+import { RemoteMicHelpModal } from './components/RemoteMicHelpModal.tsx';
 import { audioEngine } from './utils/audioEngine.ts';
 import { speechEngine } from './utils/speechEngine.ts';
 import { callHermesDirectly } from './utils/hermesClient.ts';
@@ -78,10 +79,17 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTestMode, setIsTestMode] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isRemoteMicHelpOpen, setIsRemoteMicHelpOpen] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [showMicBanner, setShowMicBanner] = useState(false);
   const [micBannerData, setMicBannerData] = useState<{ title: string; message: string } | null>(null);
   const [agentStatusText, setAgentStatusText] = useState<string>('');
+
+  const isRemoteInsecure =
+    typeof window !== 'undefined' &&
+    !window.isSecureContext &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1';
 
   const isHandsFreeRef = useRef(config.handsFree);
   isHandsFreeRef.current = config.handsFree;
@@ -106,6 +114,14 @@ export default function App() {
   const handleStartRecording = async () => {
     setShowMicBanner(false);
     setAgentStatusText('');
+
+    // If on a remote device over insecure HTTP, immediately open the help modal with instructions
+    if (isRemoteInsecure) {
+      setIsRemoteMicHelpOpen(true);
+      setAgentStatusText('El micrófono está bloqueado por HTTP en este dispositivo. Pulsa para ver solución.');
+      return;
+    }
+
     try {
       speechEngine.stopSpeaking();
       audioEngine.stopAudioPlayback();
@@ -119,12 +135,18 @@ export default function App() {
         micStream = await audioEngine.startMicrophone();
       } catch (micErr: any) {
         console.warn('Microphone stream could not be started in current context:', micErr?.message || micErr);
+        if (micErr?.name === 'InsecureOriginError' || micErr?.isRemoteInsecure) {
+          setIsRemoteMicHelpOpen(true);
+          setAgentStatusText('El micrófono requiere autorización en este dispositivo');
+          return;
+        }
+
         setShowMicBanner(true);
         setMicBannerData({
           title: micErr?.name === 'NotAllowedError' ? 'Permiso de micrófono bloqueado' : 'Micrófono no detectado',
           message: micErr?.name === 'NotAllowedError'
             ? 'El navegador tiene bloqueado el micrófono. Haz clic en el icono del candado en la barra de direcciones de tu navegador y concede permiso al micrófono.'
-            : 'No se pudo acceder a ningún micrófono en tu sistema. Puedes escribir tus mensajes directamente en la caja inferior.',
+            : 'No se pudo acceder a ningún micrófono en tu sistema. Puedes escribir tus mensajes directamente en la caja inferior o activar el flag en tu navegador.',
         });
         setAgentStatusText('Permiso de micrófono necesario');
         setIsRecording(false);
@@ -395,6 +417,8 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         provider="Hermes Agent"
         isOnline={true}
+        isRemoteInsecure={isRemoteInsecure}
+        onOpenRemoteMicHelp={() => setIsRemoteMicHelpOpen(true)}
       />
 
       {/* Main Single-column Minimalist Canvas */}
@@ -477,6 +501,12 @@ export default function App() {
         config={config}
         onSave={(newCfg) => setConfig(newCfg)}
         availableVoices={availableVoices}
+      />
+
+      {/* Remote Mic Insecure Origin Help Modal */}
+      <RemoteMicHelpModal
+        isOpen={isRemoteMicHelpOpen}
+        onClose={() => setIsRemoteMicHelpOpen(false)}
       />
 
       {/* Minimal Footer */}
